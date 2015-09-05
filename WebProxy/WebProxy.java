@@ -4,8 +4,8 @@
 //// (2 marks) Your proxy can handle small web objects like a small file or image. 
 //// (2 marks) Your proxy can handle a complex web page with multiple objects, e.g., www.comp.nus.edu.sg.
 // (2 marks) Your proxy can handle very large files of up to 1 GB.
-// (2 marks) Your proxy should be able to handle erroneous requests such as a “404” response.
-//           It should also return a “502” response if cannot reach the web server.
+// (2 marks) Your proxy should be able to handle erroneous requests such as a "404" response.
+//           It should also return "502" response if cannot reach the web server.
 // (2 marks) Your proxy can also handle the POST method in addition to GET method,
 //           and will correctly include the request body sent in the POST-request.
 
@@ -27,19 +27,25 @@
 // (2 marks) Text censorship. A text file censor.txt containing a list of censored words is placed in
 //           the same directory as your WebProxy. Each line of the file contains one word. Your proxy
 //           should detect text or HTML files that are being transfered (from the Content-type header)
-//           and replace any censored words with 3 dashes “–-”. The matching word should be case insensitive.
+//           and replace any censored words with 3 dashes "–-". The matching word should be case insensitive.
 //// (2 marks) Multi-threading. Your proxy can concurrently handle multiple connections from several clients.
 
 
 import java.net.*;
 import java.io.*;
 import java.util.*;
-import java.nio.file.*;
 
 class MyThread implements Runnable {
 	Socket client;
 	public MyThread(Socket _client) {
 		client = _client;
+	}
+
+	public void printStartMessage() {
+		System.out.println("\n------START CONNECTION FROM: " + client + "-------\n");
+	}
+	public void printEndMessage() {
+		System.out.println("\n------END CONNECTION FROM: " + client + "-------\n");
 	}
 
 	public void run() {
@@ -48,6 +54,8 @@ class MyThread implements Runnable {
 		URL url;
 		BufferedReader fromClient;
 		BufferedOutputStream toClient;
+
+		printStartMessage();		
 		try {
 			/** Read client's HTTP request **/
 			fromClient = new BufferedReader(new InputStreamReader(client.getInputStream()));
@@ -62,45 +70,43 @@ class MyThread implements Runnable {
 		}
 		catch (Exception e) {
 			System.out.println("Error reading request from client: " + e);
+			printEndMessage();
 			return;
 		}
 
-		System.out.println("Cache miss! Trying to connect to " + url);
 		try {
 			/** connect to server and relay client's request **/
 			Socket server = new Socket(url.getHost(),80);
-			
-			System.out.println("Connected to server!");
+			System.out.println("Connected to server!\n");
 			/** Get response from server **/
 
+			System.out.println("-------START REQUEST FROM CLIENT------");
 			PrintWriter toServer = new PrintWriter(server.getOutputStream());
 			toServer.println(method + " " + url.getFile() + " " + version);
-			System.out.println(method + " " + url.getFile() + " " + version);
+			System.out.println(method + " " + url + " " + version);
 			while (fromClient.ready()) {
 				String command = fromClient.readLine();
-				if (command.contains("keep-alive")) continue; // Disable keep alive
+				if (command.toLowerCase().contains("keep-alive")) continue; // Disable keep alive
 				toServer.println(command);
 				System.out.println(command);
 			}
+			System.out.println("------- END REQUEST FROM CLIENT------\n");
 			toServer.flush();
-
 			System.out.println("Request sent to server!");
 
 			BufferedInputStream fromServer = new BufferedInputStream(server.getInputStream());
 
 			byte[] buff = new byte[64 * 1024];
 			int len;
+			System.out.println("----START SENDING RESPONSE FROM SERVER TO CLIENT-----");
 			while ((len = fromServer.read(buff)) > 0) {
 				System.out.println("Trying to write : " + len + " bytes");
 				toClient.write(buff, 0, len);
 				toClient.flush();
 			}
-			System.out.println("Trying to close server InputStream");
 			fromServer.close();
-			System.out.println("Trying to close client OutputStream");
 			toClient.close();
-
-			System.out.println("Response from server has been sent to client!");
+			System.out.println("----END SENDING RESPONSE FROM SERVER TO CLIENT-----");
 
 			server.close();
 			/** Cache the contents as appropriate **/
@@ -109,8 +115,11 @@ class MyThread implements Runnable {
 			client.close();
 		}
 		catch (IOException e) {
-
+			System.out.println("Error in relaying client's request to server: " + e);
+			printEndMessage();
+			return;
 		}
+		printEndMessage();
 	}
 }
 
@@ -146,7 +155,6 @@ public class WebProxy {
 			Socket client = null;
 			try {
 				client = socket.accept();
-				System.out.println("'Received a connection from: " + client);
 			} 
 			catch (Exception e) {
 				System.out.println("Error accepting socket: " + e);
@@ -154,7 +162,8 @@ public class WebProxy {
 			}
 
 			Runnable r = new MyThread(client);
-			new Thread(r).start();
+			r.run();
+			// new Thread(r).start();
 		}
 	}
 }
