@@ -9,21 +9,21 @@
 //// (2 marks) Your proxy can also handle the POST method in addition to GET method,
 ////           and will correctly include the request body sent in the POST-request.
 
-// (2 marks) Simple caching. A typical proxy server will cache the web pages each time the client makes a particular request for the first time. 
-//           The basic functionality of caching works as follows:
-//           When the proxy gets a request, it checks if the requested object is cached, and if it is, it
-//           simply returns the object from the cache, without contacting the server. If the object is not
-//           cached, the proxy retrieves the object from the server, returns it to the client and caches a
-//           copy for future requests.
-//           Your implementation will need to be able to write responses to the disk (i.e., the cache) and
-//           fetch them from the disk when you get a cache hit. For this you need to implement some
-//           internal data structure in the proxy to keep track of which objects are cached and where they
-//           are on the disk. You can keep this data structure in main memory; there is no need to make
-//           it persist across shutdowns.
-// (2 marks) Advanced caching. Your proxy server must verify that the cached objects are still valid and
-//           that they are the correct responses to the client’s requests. Your proxy can send a request
-//           to the origin server with a header If-Modified-Since and the server will response with a
-//           HTTP 304 - Not Modified if the object has not changed. This is also known as a Conditional Request.
+//// (2 marks) Simple caching. A typical proxy server will cache the web pages each time the client makes a particular request for the first time. 
+////           The basic functionality of caching works as follows:
+////           When the proxy gets a request, it checks if the requested object is cached, and if it is, it
+////           simply returns the object from the cache, without contacting the server. If the object is not
+////           cached, the proxy retrieves the object from the server, returns it to the client and caches a
+////           copy for future requests.
+////           Your implementation will need to be able to write responses to the disk (i.e., the cache) and
+////           fetch them from the disk when you get a cache hit. For this you need to implement some
+////           internal data structure in the proxy to keep track of which objects are cached and where they
+////           are on the disk. You can keep this data structure in main memory; there is no need to make
+////           it persist across shutdowns.
+//// (2 marks) Advanced caching. Your proxy server must verify that the cached objects are still valid and
+////           that they are the correct responses to the client’s requests. Your proxy can send a request
+////           to the origin server with a header If-Modified-Since and the server will response with a
+////           HTTP 304 - Not Modified if the object has not changed. This is also known as a Conditional Request.
 //// (2 marks) Text censorship. A text file censor.txt containing a list of censored words is placed in
 ////           the same directory as your WebProxy. Each line of the file contains one word. Your proxy
 ////           should detect text or HTML files that are being transfered (from the Content-type header)
@@ -36,31 +36,108 @@ import java.io.*;
 import java.util.*;
 import java.nio.charset.*;
 
+class FileCache {
+	Integer currNum = 0;
+	String cacheFormat = ".cache";
+
+	HashMap<String,String> map;
+	HashMap<String,String> lastModifiedMap;
+	FileCache() {
+		map = new HashMap<String,String>();
+		lastModifiedMap = new HashMap<String,String>();
+	}
+	public boolean isCacheExists(String url) {
+		return (map.containsKey(url) && lastModifiedMap.containsKey(url));
+	}
+	public FileInputStream getCache(String url) {
+		try {
+			String filename = map.get(url);
+			FileInputStream fos = new FileInputStream(filename);
+			return fos;
+		}
+		catch (Exception e) {
+			System.out.println("Failed in reading cache : " + e);
+			return null;
+		}
+	}
+
+	public void writeCache(String url, byte[] buffer, int off, int len) {
+		String filename;
+		FileOutputStream fos;
+		try {
+			if (!isCacheExists(url)) {
+				filename = currNum.toString()+cacheFormat;
+				map.put(url,currNum.toString()+cacheFormat);
+				currNum++;
+				fos = new FileOutputStream(filename);
+			}
+			else {
+				filename = map.get(url);
+				fos = new FileOutputStream(filename,true);
+			}
+			fos.write(buffer,off,len);
+			fos.close();
+		}
+		catch (Exception e) {
+			System.out.println("Failed in writing cache : " + e);
+			return;
+		}
+	}
+
+	public void writeLastModified(String url, String lastModified) {
+		lastModifiedMap.put(url,lastModified);
+	}
+
+	public String getLastModified(String url) {
+		return lastModifiedMap.get(url);
+	}
+
+	public void resetCacheUrl(String url) {
+		map.remove(url);
+	}
+
+}
+
 class MyThread implements Runnable {
+	private boolean debugMode = true;
+
 	List<String> censorWords;
 	Socket client;
-	public MyThread(Socket _client, List<String> _censorWords) {
+	FileCache fileCache;
+
+	String method;
+	String version;
+	URL url;
+	BufferedReader fromClient;
+	BufferedOutputStream toClient;
+
+	byte[] buff = new byte[64 * 1024];
+	int len = -1;
+	boolean isTextHtml = false;
+	boolean isEncoded = false;
+	boolean isModified = true;
+
+
+	public MyThread(Socket _client, List<String> _censorWords, FileCache _fileCache) {
 		client = _client;
 		censorWords = _censorWords;
+		fileCache = _fileCache;
 	}
 
 	private void printStartMessage() {
-		System.out.println("\n------START CONNECTION FROM: " + client + "-------\n");
+		if (debugMode) System.out.println("\n------START CONNECTION FROM: " + client + "-------\n");
 	}
 	private void printEndMessage() {
-		System.out.println("\n------END CONNECTION FROM: " + client + "-------\n");
+		if (debugMode) System.out.println("\n------END CONNECTION FROM: " + client + "-------\n");
+	}
+	private void printLog(String message) {
+		if (debugMode) System.out.println(message);
 	}
 
 	public void run() {
-		String method;
-		String version;
-		URL url;
-		BufferedReader fromClient;
-		BufferedOutputStream toClient;
-
 		printStartMessage();		
 		try {
-			/** Read client's HTTP request **/
+			// Read client's HTTP request
 			fromClient = new BufferedReader(new InputStreamReader(client.getInputStream()));
 			toClient = new BufferedOutputStream(client.getOutputStream());
 			
@@ -71,47 +148,59 @@ class MyThread implements Runnable {
 			version = tmp[2];
 		}
 		catch (Exception e) {
-			System.out.println("Error reading request from client: " + e);
+			printLog("Error reading request from client: " + e);
 			printEndMessage();
 			return;
 		}
 
 		try {
-			/** connect to server and relay client's request **/
+			// connect to server and relay client's request
 			Socket server = new Socket(url.getHost(),80);
-			System.out.println("Connected to server!\n");
-			/** Get response from server **/
+			printLog("Connected to server!\n");
+			printLog("-------START REQUEST FROM CLIENT------");
 
-			System.out.println("-------START REQUEST FROM CLIENT------");
 			PrintWriter toServer = new PrintWriter(server.getOutputStream());
 			toServer.println(method + " " + url.getFile() + " " + version);
-			System.out.println(method + " " + url + " " + version);
-			System.out.println(method + " " + url.getFile() + " " + version);
+			printLog(method + " " + url + " " + version);
+			printLog(method + " " + url.getFile() + " " + version);
+
+			if (fileCache.isCacheExists(url.toString())) {
+				toServer.println("If-Modified-Since:" + fileCache.getLastModified(url.toString()));
+				printLog("If-Modified-Since:" + fileCache.getLastModified(url.toString()));
+			}
+
+			int clientContentLength = 0;
 			while (fromClient.ready()) {
 				String command = fromClient.readLine();
 				if (command.toLowerCase().contains("keep-alive")) continue; // Disable keep alive
+				if (command.toLowerCase().contains("content-length")) {
+					String length = command.substring(command.indexOf(" ")+1);
+					clientContentLength = Integer.parseInt(length);
+				}
 				toServer.println(command);
-				System.out.println(command);
+				printLog(command);
 				if (command.length() == 0) break;
 			}
-			// Read necessary POST information
+			// Read necessary POST information and send to Server
 			if (method.equals("POST")) {
+				int lenRead = 0;
 				char[] charBuff = new char[64 * 1024];;
-				int lenCharBuff = fromClient.read(charBuff);
-				String postString = String.copyValueOf(charBuff, 0, lenCharBuff);
-				toServer.println(postString);
-				System.out.println(postString);
+				int lenCharBuff;
+				while ((lenCharBuff = fromClient.read(charBuff)) > 0) {
+					String postString = String.copyValueOf(charBuff, 0, lenCharBuff);
+					toServer.println(postString);
+					printLog(postString);
+					lenRead += lenCharBuff;
+					if (lenRead >= clientContentLength) break;
+				}
 			}
 
-			System.out.println("------- END REQUEST FROM CLIENT------\n");
+			printLog("------- END REQUEST FROM CLIENT------\n");
 			toServer.flush();
-			System.out.println("Request sent to server!");
+			printLog("Request sent to server!");
 
 			BufferedInputStream fromServer = new BufferedInputStream(server.getInputStream());
-			byte[] buff = new byte[64 * 1024];
-			int len = -1;
-			boolean isTextHtml = false;
-			boolean isEncoded = false;
+			
 
 			// Get the header response from the server
 			if ((len = fromServer.read(buff)) > 0) {
@@ -120,9 +209,9 @@ class MyThread implements Runnable {
 				if (endHeaderIndex != -1) {
 					currString = currString.substring(0,endHeaderIndex);
 				}
-				System.out.println("---- START HTTP RESPONSE FROM SERVER ----");
-				System.out.println(currString);
-				System.out.println("---- END HTTP RESPONSE FROM SERVER ----");
+				printLog("---- START HTTP RESPONSE FROM SERVER ----");
+				printLog(currString);
+				printLog("---- END HTTP RESPONSE FROM SERVER ----");
 				
 				Scanner scanHeader = new Scanner(currString);
 				if (scanHeader.hasNext()) {
@@ -138,7 +227,11 @@ class MyThread implements Runnable {
 						toServer.close();
 						fromClient.close();
 						toClient.close();
+						printEndMessage();
 						return;
+					}
+					else if (errorCode.equals("304")) {
+						isModified = false;
 					}
 				}
 
@@ -151,53 +244,76 @@ class MyThread implements Runnable {
 					else if (fieldTitle.toLowerCase().contains("content-encoding")) {
 						isEncoded = true;
 					}
+					else if (fieldTitle.toLowerCase().contains("date")) {
+						fileCache.writeLastModified(url.toString(),fieldAttribute);
+					}
 				}
 			}
 
-			// if the content type received is text/html, censor text from censor.txt
-			if (isTextHtml && !isEncoded) {
-				System.out.println("----START SENDING TEXT RESPONSE FROM SERVER TO CLIENT-----");
-				StringBuilder htmlPage = new StringBuilder();
-				// Append bytes previously read
-				if (len > 0) {
-					String temp =  new String(buff, 0 , len);
-					htmlPage.append(temp);
+			if (!isModified) {
+				// Check whether cache exists, if yes, write to toClient stream
+				if (fileCache.isCacheExists(url.toString())) {
+					printLog("Cache Hit! and Not Modified!");
+					FileInputStream fromCache = fileCache.getCache(url.toString());
+					try {
+						while ((len = fromCache.read(buff)) > 0) {
+							printLog("Trying to write : " + len + " bytes");
+							toClient.write(buff, 0, len);
+							toClient.flush();
+						}
+						toClient.close();
+						printEndMessage();
+						return;
+					}
+					catch (IOException e) {
+						printLog("Error while reading and writing from cache : " + e);
+					}
 				}
-				// append bytes to string until the end of stream
-				while ((len = fromServer.read(buff)) > 0) {
-					System.out.println("Trying to write text : " + len + " bytes");
-					String temp =  new String(buff, 0 , len);
-					htmlPage.append(temp);
-				}
-				// Iterate through the words to be censored, and replace it by --- (not case sensitive)
-				String htmlPageString = htmlPage.toString();
-				System.out.println(htmlPageString);
-				for (int i=0;i<censorWords.size();i++) {
-					htmlPageString = htmlPageString.replaceAll("(?i)" + censorWords.get(i), "---");
-				}
-				// Convert the string back to bytes and send to client
-				byte[] outBuffer = htmlPageString.getBytes(Charset.forName("UTF-8"));
-				toClient.write(outBuffer, 0, outBuffer.length);
-				toClient.flush();
-				System.out.println("----END SENDING TEXT RESPONSE FROM SERVER TO CLIENT-----");
 			}
-			// if the content is not text/html, read all the bytes and send to client straight away
 			else {
-				System.out.println("----START SENDING NON-TEXT RESPONSE FROM SERVER TO CLIENT-----");
-				// The remaining byte information from reading the header earlier
-				if (len > 0) {
-					System.out.println("Trying to write : " + len + " bytes");
-					toClient.write(buff, 0, len);
-					toClient.flush();
-				}
-
-				while ((len = fromServer.read(buff)) > 0) {
-					System.out.println("Trying to write : " + len + " bytes");
-					toClient.write(buff, 0, len);
-					toClient.flush();
-				}
-				System.out.println("----END SENDING NON-TEXT RESPONSE FROM SERVER TO CLIENT-----");
+				fileCache.resetCacheUrl(url.toString());
 			}
+
+			printLog("Cache Miss!");
+			printLog("----START SENDING RESPONSE FROM SERVER TO CLIENT-----");
+			// The remaining byte information from reading the header earlier
+			if (len > 0) {
+				printLog("Trying to write : " + len + " bytes");
+				if (isTextHtml && !isEncoded) {
+					String htmlString =  new String(buff, 0 , len);
+					for (int i=0;i<censorWords.size();i++) {
+						htmlString = htmlString.replaceAll("(?i)" + censorWords.get(i), "---");
+					}
+					byte[] outBuffer = htmlString.getBytes(Charset.forName("UTF-8"));
+					toClient.write(outBuffer, 0, outBuffer.length);
+					fileCache.writeCache(url.toString(),outBuffer, 0 , outBuffer.length);
+				}
+				else {
+					toClient.write(buff, 0, len);
+					fileCache.writeCache(url.toString(), buff, 0 , len);
+				}
+				toClient.flush();
+			}
+
+			while ((len = fromServer.read(buff)) > 0) {
+				printLog("Trying to write : " + len + " bytes");
+				if (isTextHtml && !isEncoded) {
+					String htmlString =  new String(buff, 0 , len);
+					for (int i=0;i<censorWords.size();i++) {
+						htmlString = htmlString.replaceAll("(?i)" + censorWords.get(i), "---");
+					}
+					byte[] outBuffer = htmlString.getBytes(Charset.forName("UTF-8"));
+					toClient.write(outBuffer, 0, outBuffer.length);
+					fileCache.writeCache(url.toString(),outBuffer, 0 , outBuffer.length);
+				}
+				else {
+					toClient.write(buff, 0, len);
+					fileCache.writeCache(url.toString(), buff, 0 , len);
+				}
+				toClient.flush();
+			}
+			printLog("----END SENDING RESPONSE FROM SERVER TO CLIENT-----");
+		
 
 			fromServer.close();
 			toClient.close();
@@ -208,9 +324,16 @@ class MyThread implements Runnable {
 			client.close();
 		}
 		catch (IOException e) {
-			System.out.println("Error in relaying client's request to server: " + e);
+			printLog("Error in relaying client's request to server: " + e);
+			try {
+				String errorHtml = "<h1> " + e.toString() + "</h1>\n";
+				byte[] buffer = errorHtml.getBytes(Charset.forName("UTF-8"));
+				toClient.write(buffer, 0, buffer.length);
+				toClient.flush();
+				toClient.close();
+			}
+			catch (IOException e2) {}
 			printEndMessage();
-			return;
 		}
 		printEndMessage();
 	}
@@ -218,26 +341,23 @@ class MyThread implements Runnable {
 
 public class WebProxy {
 	private static List<String> censorWords;
+	private static FileCache fileCache;
 
-	/** Port for the proxy */
 	private static int port;
-
-	/** Socket for client connections */
 	private static ServerSocket socket;
 	
 	public static void main(String args[]) {
-		/** Read command line arguments and start proxy */
 		if (args.length != 1) {
 			System.out.println("Wrong number of arguments! Please enter the port as arg!");
 			return;
 		}
-		/** Read port number as command-line argument **/
 		else {
 			port = Integer.parseInt(args[0]);
 		}
 
-		// Read censor.txt for the list of words to be censored
 		try {
+			fileCache = new FileCache();
+			// Read censor.txt for the list of words to be censored
 			censorWords = new ArrayList<String>();
 			Scanner scanCensor = new Scanner(new File("censor.txt"));
 			while (scanCensor.hasNext()) {
@@ -250,7 +370,7 @@ public class WebProxy {
 		}
 
 		try {
-			/** Create a server socket, bind it to a port and start listening **/
+			// Create a server socket, bind it to a port and start listening
 			socket = new ServerSocket(port);
 		}
 		catch (IOException e) {
@@ -258,7 +378,7 @@ public class WebProxy {
 			return;
 		}
 
-		/** Main loop. Listen for incoming connections **/
+		// Main loop. Listen for incoming connections
 		while (true) {
 			Socket client = null;
 			try {
@@ -269,7 +389,8 @@ public class WebProxy {
 				continue;
 			}
 
-			Runnable r = new MyThread(client,censorWords);
+			// Run each incoming connection in new thread, multi-threading
+			Runnable r = new MyThread(client,censorWords,fileCache);
 			// r.run();
 			new Thread(r).start();
 		}
