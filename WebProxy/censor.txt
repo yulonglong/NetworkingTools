@@ -1,3 +1,2 @@
 Hello
-student
-computer
+Science

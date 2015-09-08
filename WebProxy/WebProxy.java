@@ -102,21 +102,27 @@ class MyThread implements Runnable {
 	private boolean debugMode = true;
 
 	List<String> censorWords;
-	Socket client;
 	FileCache fileCache;
+	Socket client;
+	Socket server;
 
 	String method;
 	String version;
 	URL url;
+
 	BufferedReader fromClient;
 	BufferedOutputStream toClient;
+	BufferedInputStream fromServer;
+	PrintWriter toServer;
 
 	byte[] buff = new byte[64 * 1024];
 	int len = -1;
+	int clientContentLength = 0;
+
 	boolean isTextHtml = false;
 	boolean isEncoded = false;
 	boolean isModified = true;
-
+	
 
 	public MyThread(Socket _client, List<String> _censorWords, FileCache _fileCache) {
 		client = _client;
@@ -134,8 +140,7 @@ class MyThread implements Runnable {
 		if (debugMode) System.out.println(message);
 	}
 
-	public void run() {
-		printStartMessage();		
+	private boolean initializeStreamFromClient() {
 		try {
 			// Read client's HTTP request
 			fromClient = new BufferedReader(new InputStreamReader(client.getInputStream()));
@@ -146,30 +151,50 @@ class MyThread implements Runnable {
 			method = tmp[0];
 			url = new URL(tmp[1]);
 			version = tmp[2];
+			return true;
 		}
 		catch (Exception e) {
 			printLog("Error reading request from client: " + e);
-			printEndMessage();
-			return;
+			return false;
 		}
+	}
 
+	private void closeServer() {
 		try {
-			// connect to server and relay client's request
-			Socket server = new Socket(url.getHost(),80);
-			printLog("Connected to server!\n");
-			printLog("-------START REQUEST FROM CLIENT------");
+			fromServer.close();
+			toServer.close();
+			server.close();
+		}
+		catch (Exception e) {}
+	}
+	private void closeClient() {
+		try {
+			fromClient.close();
+			toClient.close();	
+			client.close();
+		}
+		catch (Exception e) {}
+	}
+	private void closeAllConnections() {
+		closeClient();
+		closeServer();
+	}
 
-			PrintWriter toServer = new PrintWriter(server.getOutputStream());
-			toServer.println(method + " " + url.getFile() + " " + version);
-			printLog(method + " " + url + " " + version);
+	private ArrayList<String> getClientRequest() {
+		ArrayList<String> clientRequest = new ArrayList<String>();
+
+		printLog("-------START READING REQUEST FROM CLIENT------");
+		try {
+			clientRequest.add(method + " " + url.getFile() + " " + version);
 			printLog(method + " " + url.getFile() + " " + version);
 
+			// If cache exists, ask if modified since to get 304 response
 			if (fileCache.isCacheExists(url.toString())) {
-				toServer.println("If-Modified-Since:" + fileCache.getLastModified(url.toString()));
+				clientRequest.add("If-Modified-Since:" + fileCache.getLastModified(url.toString()));
 				printLog("If-Modified-Since:" + fileCache.getLastModified(url.toString()));
 			}
 
-			int clientContentLength = 0;
+			clientContentLength = 0;
 			while (fromClient.ready()) {
 				String command = fromClient.readLine();
 				if (command.toLowerCase().contains("keep-alive")) continue; // Disable keep alive
@@ -177,10 +202,31 @@ class MyThread implements Runnable {
 					String length = command.substring(command.indexOf(" ")+1);
 					clientContentLength = Integer.parseInt(length);
 				}
-				toServer.println(command);
+				clientRequest.add(command);
 				printLog(command);
 				if (command.length() == 0) break;
 			}
+			printLog("-------END READING REQUEST FROM CLIENT------");
+			return clientRequest;
+		}
+		catch (IOException e) {
+			printLog("Error while reading client HTTP Request : " + e);
+			printLog("-------END READING REQUEST FROM CLIENT------");
+			return null;
+		}
+	}
+
+	private boolean sendRequestToServer(ArrayList<String> clientRequest) {
+		if (clientRequest == null) {
+			return false;
+		}
+		printLog("-------START SENDING REQUEST TO SERVER------");
+		try {
+			toServer = new PrintWriter(server.getOutputStream());
+			for (String line : clientRequest) {
+				toServer.println(line);
+			}
+
 			// Read necessary POST information and send to Server
 			if (method.equals("POST")) {
 				int lenRead = 0;
@@ -195,15 +241,25 @@ class MyThread implements Runnable {
 				}
 			}
 
-			printLog("------- END REQUEST FROM CLIENT------\n");
 			toServer.flush();
-			printLog("Request sent to server!");
+			printLog("-------END SENDING REQUEST TO SERVER------");
+			return true;
+		}
+		catch (IOException e) {
+			printLog("Error while sending HTTP Request to server : " + e);
+			printLog("-------END SENDING REQUEST TO SERVER------");
+			return false;
+		}
+	}
 
-			BufferedInputStream fromServer = new BufferedInputStream(server.getInputStream());
-			
-
-			// Get the header response from the server
+	private boolean processHttpResponseHeader() {
+		// Get the header response from the server
+		try {
+			isTextHtml = false;
+			isEncoded = false;
+			isModified = true;
 			if ((len = fromServer.read(buff)) > 0) {
+				// Get just the header rom the byte array
 				String currString = new String(buff, 0 ,len);
 				int endHeaderIndex = currString.indexOf("\r\n\r\n");
 				if (endHeaderIndex != -1) {
@@ -213,6 +269,8 @@ class MyThread implements Runnable {
 				printLog(currString);
 				printLog("---- END HTTP RESPONSE FROM SERVER ----");
 				
+				// Parse the http header, detect error code and return the appropriate response
+				// Detect if there is a cache and 304 not modified response is returned
 				Scanner scanHeader = new Scanner(currString);
 				if (scanHeader.hasNext()) {
 					String httpVersion = scanHeader.next();
@@ -223,12 +281,7 @@ class MyThread implements Runnable {
 						byte[] buffer = errorHtml.getBytes(Charset.forName("UTF-8"));
 						toClient.write(buffer, 0, buffer.length);
 						toClient.flush();
-						fromServer.close();
-						toServer.close();
-						fromClient.close();
-						toClient.close();
-						printEndMessage();
-						return;
+						return false;
 					}
 					else if (errorCode.equals("304")) {
 						isModified = false;
@@ -249,33 +302,43 @@ class MyThread implements Runnable {
 					}
 				}
 			}
+			return true;
+		}
+		catch (IOException e ) {
+			printLog("Error while parsing HTTP response header: " + e);
+			return false;
+		}
+	}
 
-			if (!isModified) {
-				// Check whether cache exists, if yes, write to toClient stream
-				if (fileCache.isCacheExists(url.toString())) {
-					printLog("Cache Hit! and Not Modified!");
-					FileInputStream fromCache = fileCache.getCache(url.toString());
-					try {
-						while ((len = fromCache.read(buff)) > 0) {
-							printLog("Trying to write : " + len + " bytes");
-							toClient.write(buff, 0, len);
-							toClient.flush();
-						}
-						toClient.close();
-						printEndMessage();
-						return;
-					}
-					catch (IOException e) {
-						printLog("Error while reading and writing from cache : " + e);
-					}
+	private boolean sendResponseFromCache() {
+		// Check whether cache exists, if yes, write to toClient stream
+		if ((!isModified) && (fileCache.isCacheExists(url.toString()))) {
+			printLog("Cache Hit! and Not Modified!");
+			FileInputStream fromCache = fileCache.getCache(url.toString());
+			try {
+				while ((len = fromCache.read(buff)) > 0) {
+					printLog("Trying to write : " + len + " bytes");
+					toClient.write(buff, 0, len);
+					toClient.flush();
 				}
+				return true;
 			}
-			else {
-				fileCache.resetCacheUrl(url.toString());
+			catch (IOException e) {
+				printLog("Error while reading and writing from cache : " + e);
+				return false;
 			}
+		}
+		else {
+			fileCache.resetCacheUrl(url.toString());
+			return false;
+		}
+	}
 
+	private boolean sendResponseToClient() {
+		try {
 			printLog("Cache Miss!");
 			printLog("----START SENDING RESPONSE FROM SERVER TO CLIENT-----");
+
 			// The remaining byte information from reading the header earlier
 			if (len > 0) {
 				printLog("Trying to write : " + len + " bytes");
@@ -295,6 +358,7 @@ class MyThread implements Runnable {
 				toClient.flush();
 			}
 
+			// Read the remaining bytes
 			while ((len = fromServer.read(buff)) > 0) {
 				printLog("Trying to write : " + len + " bytes");
 				if (isTextHtml && !isEncoded) {
@@ -313,15 +377,35 @@ class MyThread implements Runnable {
 				toClient.flush();
 			}
 			printLog("----END SENDING RESPONSE FROM SERVER TO CLIENT-----");
-		
+			return true;
+		}
+		catch (IOException e) {
+			printLog("----END SENDING RESPONSE FROM SERVER TO CLIENT-----");
+			printLog("Error while sending response to client : " + e);
+			return false;
+		}
+	}
 
-			fromServer.close();
-			toClient.close();
-			fromClient.close();
-			toServer.close();
+	private void executeProxy() throws IOException {
+		// connect to server and relay client's request
+		server = new Socket(url.getHost(), 80);
+		printLog("Connected to server!\n");
 
-			server.close();
-			client.close();
+		if (!sendRequestToServer(getClientRequest())) return;
+
+		fromServer = new BufferedInputStream(server.getInputStream());
+
+		if (!processHttpResponseHeader()) return;
+		if (sendResponseFromCache()) return;
+		sendResponseToClient();
+	}
+
+	public void run() {
+		printStartMessage();
+		if (!initializeStreamFromClient()) return;
+		try {
+			executeProxy();
+			closeAllConnections();
 		}
 		catch (IOException e) {
 			printLog("Error in relaying client's request to server: " + e);
@@ -330,10 +414,9 @@ class MyThread implements Runnable {
 				byte[] buffer = errorHtml.getBytes(Charset.forName("UTF-8"));
 				toClient.write(buffer, 0, buffer.length);
 				toClient.flush();
-				toClient.close();
+				closeAllConnections();
 			}
 			catch (IOException e2) {}
-			printEndMessage();
 		}
 		printEndMessage();
 	}
@@ -391,7 +474,6 @@ public class WebProxy {
 
 			// Run each incoming connection in new thread, multi-threading
 			Runnable r = new MyThread(client,censorWords,fileCache);
-			// r.run();
 			new Thread(r).start();
 		}
 	}
