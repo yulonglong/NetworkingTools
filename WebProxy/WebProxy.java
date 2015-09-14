@@ -1,34 +1,57 @@
 // Steven Kester Yuwono
 // A0080415N
 
-//// (2 marks) Your proxy can handle small web objects like a small file or image. 
-//// (2 marks) Your proxy can handle a complex web page with multiple objects, e.g., www.comp.nus.edu.sg.
-//// (2 marks) Your proxy can handle very large files of up to 1 GB.
-//// (2 marks) Your proxy should be able to handle erroneous requests such as a "404" response.
-////           It should also return "502" response if cannot reach the web server.
-//// (2 marks) Your proxy can also handle the POST method in addition to GET method,
-////           and will correctly include the request body sent in the POST-request.
 
-//// (2 marks) Simple caching. A typical proxy server will cache the web pages each time the client makes a particular request for the first time. 
-////           The basic functionality of caching works as follows:
-////           When the proxy gets a request, it checks if the requested object is cached, and if it is, it
-////           simply returns the object from the cache, without contacting the server. If the object is not
-////           cached, the proxy retrieves the object from the server, returns it to the client and caches a
-////           copy for future requests.
-////           Your implementation will need to be able to write responses to the disk (i.e., the cache) and
-////           fetch them from the disk when you get a cache hit. For this you need to implement some
-////           internal data structure in the proxy to keep track of which objects are cached and where they
-////           are on the disk. You can keep this data structure in main memory; there is no need to make
-////           it persist across shutdowns.
-//// (2 marks) Advanced caching. Your proxy server must verify that the cached objects are still valid and
-////           that they are the correct responses to the client’s requests. Your proxy can send a request
-////           to the origin server with a header If-Modified-Since and the server will response with a
-////           HTTP 304 - Not Modified if the object has not changed. This is also known as a Conditional Request.
-//// (2 marks) Text censorship. A text file censor.txt containing a list of censored words is placed in
-////           the same directory as your WebProxy. Each line of the file contains one word. Your proxy
-////           should detect text or HTML files that are being transfered (from the Content-type header)
-////           and replace any censored words with 3 dashes "–-". The matching word should be case insensitive.
-//// (2 marks) Multi-threading. Your proxy can concurrently handle multiple connections from several clients.
+// WebProxy has been tested using Firefox 40.0.3 on Windows 10 Education
+// Before Running WebProxy, please take note of the following environment used for testing:
+// 1. Make sure WebProxy.java and censor.txt is inside a new folder (it will create many cache files if you place it on desktop)
+// 2. Compile with the following commad
+//    $>> javac WebProxy.java
+// 3. Run with the desired port (e.g. port 8000)
+//    $>> java WebProxy 8000
+// 4. Open Mozilla Firefox -> Options -> Advanced -> Network -> Connection -> Settings
+// 5. Select "Manual Proxy Configurations", enter the IP-Address and port. 
+//    By default is "localhost" or "127.0.0.1", and the port specified earlier. e.g. "8000"
+// 6. Check "Use this proxy server for all protocols"
+// 7. Type "about:config" in the url bar of Mozilla Firefox, and continue
+// 8. Search for the following options and set it to the values below:
+//    a. network.http.proxy.version  = 1.0
+//    b. browser.cache.memory.enable = false
+//    c. browser.cache.disk.enable = false
+//    d. network.http.accept-encoding = "" (blank, erase the value)
+// 9. Mozilla Firefox and WebProxy are ready!
+
+
+// All of the following features are implemented:
+// 1. Your proxy can handle small web objects like a small file or image. 
+// 2. Your proxy can handle a complex web page with multiple objects, e.g., www.comp.nus.edu.sg.
+// 3. Your proxy can handle very large files of up to 1 GB.
+// 4. Your proxy should be able to handle erroneous requests such as a "404" response.
+//    It should also return "502" response if cannot reach the web server.
+// 5. Your proxy can also handle the POST method in addition to GET method,
+//    and will correctly include the request body sent in the POST-request.
+
+// 6. Simple caching. A typical proxy server will cache the web pages each time the client makes a particular request for the first time. 
+//    The basic functionality of caching works as follows:
+//    When the proxy gets a request, it checks if the requested object is cached, and if it is, it
+//    simply returns the object from the cache, without contacting the server. If the object is not
+//    cached, the proxy retrieves the object from the server, returns it to the client and caches a
+//    copy for future requests.
+//    Your implementation will need to be able to write responses to the disk (i.e., the cache) and
+//    fetch them from the disk when you get a cache hit. For this you need to implement some
+//    internal data structure in the proxy to keep track of which objects are cached and where they
+//    are on the disk. You can keep this data structure in main memory; there is no need to make
+//    it persist across shutdowns.
+// 7. Advanced caching. Your proxy server must verify that the cached objects are still valid and
+//    that they are the correct responses to the client’s requests. Your proxy can send a request
+//    to the origin server with a header If-Modified-Since and the server will response with a
+//    HTTP 304 - Not Modified if the object has not changed. This is also known as a Conditional Request.
+// 8. Text censorship. A text file censor.txt containing a list of censored words is placed in
+//    the same directory as your WebProxy. Each line of the file contains one word. Your proxy
+//    should detect text or HTML files that are being transfered (from the Content-type header)
+//    and replace any censored words with 3 dashes "---". The matching word should be case insensitive.
+// 9. Multi-threading. Your proxy can concurrently handle multiple connections from several clients.
+
 
 
 import java.net.*;
@@ -36,19 +59,23 @@ import java.io.*;
 import java.util.*;
 import java.nio.charset.*;
 
+// Class/Data-structure to cache webpages
 class FileCache {
 	Integer currNum = 0;
 	String cacheFormat = ".cache";
 
 	HashMap<String,String> map;
 	HashMap<String,String> lastModifiedMap;
+
 	FileCache() {
 		map = new HashMap<String,String>();
 		lastModifiedMap = new HashMap<String,String>();
 	}
+
 	public boolean isCacheExists(String url) {
 		return (map.containsKey(url) && lastModifiedMap.containsKey(url));
 	}
+
 	public FileInputStream getCache(String url) {
 		try {
 			String filename = map.get(url);
@@ -95,10 +122,10 @@ class FileCache {
 	public void resetCacheUrl(String url) {
 		map.remove(url);
 	}
-
 }
 
 class MyThread implements Runnable {
+	// Set this boolean to false to disable all console output
 	private boolean debugMode = true;
 
 	List<String> censorWords;
