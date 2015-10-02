@@ -1,43 +1,66 @@
+// Steven Kester Yuwono
+// A0080415
+
+// All numbers below are represented in bytes
+// First packet design:
+// [8-Checksum][255-DestinationFilepath]
+
 import java.net.*;
 import java.util.*;
 import java.nio.*;
+
+import java.nio.charset.*;
 import java.util.zip.*;
 
 public class SimpleUDPSender {
+	// Filename max 255 characters (UTF-8 is 1 byte per character, hence 255 bytes)
+	public static int filepathByteSize = 255;
+
+	private static byte[] toBytes(char[] chars) {
+		CharBuffer charBuffer = CharBuffer.wrap(chars);
+		ByteBuffer byteBuffer = Charset.forName("UTF-8").encode(charBuffer);
+		byte[] bytes = Arrays.copyOfRange(byteBuffer.array(), byteBuffer.position(), byteBuffer.limit());
+		Arrays.fill(charBuffer.array(), '\u0000'); // clear sensitive data
+		Arrays.fill(byteBuffer.array(), (byte) 0); // clear sensitive data
+		return bytes;
+	}
 
 	public static void main(String[] args) throws Exception 
 	{
-		if (args.length != 3) {
-			System.err.println("Usage: SimpleUDPSender <host> <port> <num_pkts>");
+		if (args.length != 4) {
+			System.err.println("Usage: SimpleUDPSender <host> <port> <source_file> <dest_file>");
 			System.exit(-1);
 		}
 
+		String sourceFilepath = args[2];
+		byte[] byteArrDestFilepath = toBytes(args[3].toCharArray());
+
 		InetSocketAddress addr = new InetSocketAddress(args[0], Integer.parseInt(args[1]));
-		int num = Integer.parseInt(args[2]);
+
 		DatagramSocket sk = new DatagramSocket();
 		DatagramPacket pkt;
-		byte[] data = new byte[20];
+		byte[] data = new byte[1400];
 		ByteBuffer b = ByteBuffer.wrap(data);
 
 		CRC32 crc = new CRC32();
 
-		for (int i = 1; i <= num; i++)
-		{
-			b.clear();
-			// reserve space for checksum
-			b.putLong(0);
-			b.putInt(i);
-			crc.reset();
-			crc.update(data, 8, data.length-8);
-			long chksum = crc.getValue();
-			b.rewind();
-			b.putLong(chksum);
+		b.clear();
+		// reserve space for checksum
+		b.putLong(0);
+		b.put(byteArrDestFilepath);
+		b.put(new byte[filepathByteSize-byteArrDestFilepath.length]); // append with empty bytes
+		
+		crc.reset();
+		crc.update(data, 8, data.length-8);
+		long chksum = crc.getValue();
+		b.rewind();
+		b.putLong(chksum);
 
-			pkt = new DatagramPacket(data, data.length, addr);
-			// Debug output
-			//System.out.println("Sent CRC:" + chksum + " Contents:" + bytesToHex(data));
-			sk.send(pkt);
-		}
+		pkt = new DatagramPacket(data, data.length, addr);
+		// Debug output
+		//System.out.println("Sent CRC:" + chksum + " Contents:" + bytesToHex(data));
+		sk.send(pkt);
+		
 	}
 
 	final protected static char[] hexArray = "0123456789ABCDEF".toCharArray();

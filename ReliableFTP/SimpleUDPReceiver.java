@@ -1,9 +1,18 @@
+// Steven Kester Yuwono
+// A0080415
+
+// All numbers below are represented in bytes
+// First packet design:
+// [8-Checksum][255-DestinationFilepath]
+
 import java.net.*;
 import java.util.*;
 import java.nio.*;
 import java.util.zip.*;
 
 public class SimpleUDPReceiver {
+	// Filename max 255 characters (UTF-8 is 1 byte per character, hence 255 bytes)
+	public static int filepathByteSize = 255;
 
 	public static void main(String[] args) throws Exception 
 	{
@@ -13,7 +22,7 @@ public class SimpleUDPReceiver {
 		}
 		int port = Integer.parseInt(args[0]);
 		DatagramSocket sk = new DatagramSocket(port);
-		byte[] data = new byte[1500];
+		byte[] data = new byte[1400];
 		DatagramPacket pkt = new DatagramPacket(data, data.length);
 		ByteBuffer b = ByteBuffer.wrap(data);
 		CRC32 crc = new CRC32();
@@ -38,7 +47,12 @@ public class SimpleUDPReceiver {
 			}
 			else
 			{
-				System.out.println("Pkt " + b.getInt());
+				// Get filename
+				byte[] byteDest = new byte[filepathByteSize];
+				b.get(byteDest, 0, filepathByteSize);
+				String destFilename = new String(byteDest).trim();
+
+				System.out.println("Pkt " + destFilename);
 				
 				DatagramPacket ack = new DatagramPacket(new byte[0], 0, 0,
 						pkt.getSocketAddress());
