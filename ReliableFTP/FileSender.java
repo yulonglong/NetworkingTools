@@ -11,6 +11,7 @@
 // Body Packet Design:
 // [8   - Checksum]
 // [2   - PacketType (char 'B')]
+// [4   - SequenceNumber]
 // [4   - attachedDataSize]
 // [xxx - Data]
 
@@ -43,15 +44,17 @@ public class FileSender {
 		return bytes;
 	}
 
-	public static int s_packetLength = 1400;
+	public static int s_packetLength = 1000;
 	public static int s_checksumLength = 8;
 	public static int s_packetTypeLength = 2;
 	// Filename max 255 characters (UTF-8 is 1 byte per character, hence 255 bytes)
 	public static int s_destinationFilepathLength = 255; 
 	public static int s_completeFilesizeLength = 8;
 	public static int s_attachedDataSizeLength = 4;
-	public static int s_dataLength = s_packetLength-s_checksumLength-s_packetTypeLength-s_attachedDataSizeLength;
+	public static int s_sequenceNumberLength = 4;
+	public static int s_dataLength = s_packetLength-s_checksumLength-s_packetTypeLength-s_attachedDataSizeLength-s_sequenceNumberLength;
 	public static int s_headerLength = s_checksumLength + s_packetTypeLength + s_destinationFilepathLength + s_completeFilesizeLength;
+	public static int s_ackLength = s_checksumLength + s_sequenceNumberLength;
 
 	private InetSocketAddress addr = null;
 	private CRC32 crc = null;
@@ -116,10 +119,12 @@ public class FileSender {
 		while ((bytesReadFromSource = sourceFileStream.read(dataSent)) > 0) {
 			b.clear();
 			b.putLong(0); // reserve space for checksum
+			
 			b.putChar('B');
+			b.putInt(counter);
 			b.putInt(bytesReadFromSource);
 			b.put(dataSent,0,bytesReadFromSource);
-			System.out.println(counter++ +" Sending " + bytesReadFromSource);
+			System.out.println(counter +" Sending " + bytesReadFromSource);
 			crc.reset();
 			crc.update(data, 8, data.length-8);
 			long chksum = crc.getValue();
@@ -128,8 +133,51 @@ public class FileSender {
 			pkt = new DatagramPacket(data, data.length, addr);
 			sk.send(pkt);
 
+			boolean isAck = false;
+			sk.setSoTimeout(2);
+
+        	while (!isAck) {
+	        	try {
+					// Check ack packet
+					byte[] ackPacket = new byte[s_ackLength];
+					ByteBuffer ackBuffer = ByteBuffer.wrap(ackPacket);
+					DatagramPacket ackPkt = new DatagramPacket(ackPacket, s_ackLength);
+					ackPkt.setLength(s_ackLength);
+					sk.receive(ackPkt);
+
+					if (ackPkt.getLength() != s_ackLength) {
+						// Packet somehow too short, corrupted
+						System.out.println("Invalid ackpkt length");
+						continue;
+					}
+
+					ackBuffer.rewind();
+					long ackChksum = ackBuffer.getLong();
+					int ackCounter = ackBuffer.getInt();
+					crc.reset();
+					crc.update(ackPacket, 8, ackPkt.getLength()-8);
+					if (crc.getValue() != ackChksum) {
+						// Packet Corrupted
+						System.out.println("Ack Pkt corrupt");
+					}
+					else {
+						if (ackCounter == counter) {
+							isAck = true;
+							System.out.println("ACK " + ackCounter);
+						}
+					}
+				}
+				catch (SocketTimeoutException e) {
+					pkt = new DatagramPacket(data, data.length, addr);
+					sk.send(pkt);
+					sk.setSoTimeout(2);
+				}
+			}
+	
 			// If not it will send too fast, the receiver will miss some files
-			Thread.sleep(1);
+			// Thread.sleep(1);
+
+			counter++;
 		}
 	}
 
