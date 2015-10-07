@@ -26,13 +26,13 @@ import java.io.*;
 public class FileSender {
 	final protected static char[] hexArray = "0123456789ABCDEF".toCharArray();
 	public static String bytesToHex(byte[] bytes) {
-	    char[] hexChars = new char[bytes.length * 2];
-	    for ( int j = 0; j < bytes.length; j++ ) {
-	        int v = bytes[j] & 0xFF;
-	        hexChars[j * 2] = hexArray[v >>> 4];
-	        hexChars[j * 2 + 1] = hexArray[v & 0x0F];
-	    }
-	    return new String(hexChars);
+		char[] hexChars = new char[bytes.length * 2];
+		for ( int j = 0; j < bytes.length; j++ ) {
+			int v = bytes[j] & 0xFF;
+			hexChars[j * 2] = hexArray[v >>> 4];
+			hexChars[j * 2 + 1] = hexArray[v & 0x0F];
+		}
+		return new String(hexChars);
 	}
 
 	private static byte[] toBytes(char[] chars) {
@@ -107,6 +107,8 @@ public class FileSender {
 		headerByteBuffer.putLong(chksum);
 		pkt = new DatagramPacket(headerByteArray, headerByteArray.length, addr);
 		sk.send(pkt);
+
+		waitForAck(0, headerByteArray);
 	}
 
 	public void sendBody() throws Exception{
@@ -133,52 +135,61 @@ public class FileSender {
 			pkt = new DatagramPacket(data, data.length, addr);
 			sk.send(pkt);
 
-			boolean isAck = false;
-			sk.setSoTimeout(2);
-
-        	while (!isAck) {
-	        	try {
-					// Check ack packet
-					byte[] ackPacket = new byte[s_ackLength];
-					ByteBuffer ackBuffer = ByteBuffer.wrap(ackPacket);
-					DatagramPacket ackPkt = new DatagramPacket(ackPacket, s_ackLength);
-					ackPkt.setLength(s_ackLength);
-					sk.receive(ackPkt);
-
-					if (ackPkt.getLength() != s_ackLength) {
-						// Packet somehow too short, corrupted
-						System.out.println("Invalid ackpkt length");
-						continue;
-					}
-
-					ackBuffer.rewind();
-					long ackChksum = ackBuffer.getLong();
-					int ackCounter = ackBuffer.getInt();
-					crc.reset();
-					crc.update(ackPacket, 8, ackPkt.getLength()-8);
-					if (crc.getValue() != ackChksum) {
-						// Packet Corrupted
-						System.out.println("Ack Pkt corrupt");
-					}
-					else {
-						if (ackCounter == counter) {
-							isAck = true;
-							System.out.println("ACK " + ackCounter);
-						}
-					}
-				}
-				catch (SocketTimeoutException e) {
-					pkt = new DatagramPacket(data, data.length, addr);
-					sk.send(pkt);
-					sk.setSoTimeout(2);
-				}
-			}
-	
+			waitForAck(counter, data);
 			// If not it will send too fast, the receiver will miss some files
 			// Thread.sleep(1);
 
 			counter++;
 		}
+	}
+
+	public void waitForAck(int expectedCounter, byte[] data) throws Exception {
+		boolean isAck = false;
+		sk.setSoTimeout(1);
+
+		while (!isAck) {
+			try {
+				// Check ack packet
+				byte[] ackPacket = new byte[s_ackLength];
+				ByteBuffer ackBuffer = ByteBuffer.wrap(ackPacket);
+				DatagramPacket ackPkt = new DatagramPacket(ackPacket, s_ackLength);
+				ackPkt.setLength(s_ackLength);
+				sk.receive(ackPkt);
+
+				if (ackPkt.getLength() != s_ackLength) {
+					// Packet somehow too short, corrupted
+					System.out.println("Invalid ackpkt length");
+					continue;
+				}
+
+				ackBuffer.rewind();
+				long ackChksum = ackBuffer.getLong();
+				int ackCounter = ackBuffer.getInt();
+				crc.reset();
+				crc.update(ackPacket, 8, ackPkt.getLength()-8);
+				if (crc.getValue() != ackChksum) {
+					// Packet Corrupted
+					System.out.println("Ack Pkt corrupt");
+				}
+				else {
+					if (ackCounter == expectedCounter) {
+						isAck = true;
+						System.out.println("ACK " + ackCounter);
+					}
+					else if (ackCounter == -1) {
+						System.out.println("ACK FINAL");
+						isAck = true;
+						break;
+					}
+				}
+			}
+			catch (SocketTimeoutException e) {
+				pkt = new DatagramPacket(data, data.length, addr);
+				sk.send(pkt);
+				sk.setSoTimeout(1);
+			}
+		}
+
 	}
 
 	public static void main(String[] args) throws Exception 

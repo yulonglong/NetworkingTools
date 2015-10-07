@@ -15,6 +15,7 @@
 // [4   - attachedDataSize]
 // [xxx - Data]
 
+
 import java.net.*;
 import java.util.*;
 import java.nio.*;
@@ -66,12 +67,11 @@ public class FileReceiver {
 		sk = new DatagramSocket(port);
 		b = ByteBuffer.wrap(incomingPacket);
 
-		maxSequenceNumber = 50000;
+		maxSequenceNumber = 2200000;
 		sequenceNumberReceived = new boolean[maxSequenceNumber];
 	}
 
 	public void waitingToReceivePacket() throws Exception{
-		
 		DatagramPacket pkt = new DatagramPacket(incomingPacket, s_packetLength);
 		
 		// Receive first packet with the destination filename
@@ -97,13 +97,17 @@ public class FileReceiver {
 			}
 			else {
 				if (type == 'H') {
-					getHeader();
+					getHeader(packetSocketAddress);
 				}
 				else if (type == 'B'){
 					getBody(packetSocketAddress);
 					if (totalBytesReceived >= destFilesize) {
 						System.out.println(totalBytesReceived);
 						bos.close();
+
+						for (int i=0;i<20;i++) {
+							sendAck(packetSocketAddress,-1); // ack that receiver has received all
+						}
 						break;
 					}
 				}
@@ -111,7 +115,12 @@ public class FileReceiver {
 		}
 	}
 
-	public void getHeader() throws Exception {
+	public void getHeader(SocketAddress packetSocketAddress) throws Exception {
+		if (sequenceNumberReceived[0]) {
+			sendAck(packetSocketAddress, 0);
+			return;
+		}
+
 		// Get filename
 		byte[] destinationFilepathByteArray = new byte[s_destinationFilepathLength];
 		b.get(destinationFilepathByteArray, 0, s_destinationFilepathLength);
@@ -124,6 +133,9 @@ public class FileReceiver {
 
 		try {
 			bos = new BufferedOutputStream(new FileOutputStream(destFilename));
+
+			sequenceNumberReceived[0] = true;
+			sendAck(packetSocketAddress, 0);
 		}
 		catch (Exception e) {
 			System.out.println("Failed in writing file!");
@@ -182,5 +194,6 @@ public class FileReceiver {
 			e.printStackTrace();
 		}
 	}
+
 	
 }
