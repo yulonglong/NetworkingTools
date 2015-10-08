@@ -1,5 +1,5 @@
 // Steven Kester Yuwono
-// A0080415
+// A0080415N
 
 // All numbers below are represented in bytes
 // Header Packet design:
@@ -15,6 +15,16 @@
 // [4   - attachedDataSize]
 // [xxx - Data]
 
+// To use run ReliableFTP:
+// 1. $> javac FileReceiver.java
+// 2. $> javac FileSender.java
+// 3. $> java FileReceiver 9005
+// 4. $> java UnreliNET 0.05 0.05 0.05 9004 9005
+// 5. $> java FileSender localhost 9004 ../image.jpg image.jpg
+// 6. When file receiver terminates, image.jpg in the curr directory is complete
+// 7. $> diff image.jpg ../image.jpg
+// 8. File transfer rate with 5% corruption and 5% drop and 5% reordering on sunfire is 8 second/MB
+// 9. All features are implemented other than the pipelining (Speed test)
 
 import java.net.*;
 import java.util.*;
