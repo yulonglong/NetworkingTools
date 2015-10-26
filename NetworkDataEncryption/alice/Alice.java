@@ -1,4 +1,5 @@
-// Author: 
+// Steven Kester Yuwono
+// A0080415N
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -52,8 +53,26 @@ class Alice {  // Alice is a TCP client
     
     // Constructor
     public Alice(String ipStr, String portStr) {
-        
+        bobIP = ipStr;
+        bobPort = Integer.parseInt(portStr);
+
         this.crypto = new Crypto();
+
+        try {
+            this.connectionSkt = new Socket(bobIP, bobPort);
+        } catch (IOException ioe) {
+            System.out.println("Error in connecting to Bob");
+            System.exit(1);
+        }
+        
+
+        try {
+            this.toBob = new ObjectOutputStream(this.connectionSkt.getOutputStream());
+            this.fromBob = new ObjectInputStream(this.connectionSkt.getInputStream());
+        } catch (IOException ioe) {
+            System.out.println("Error: cannot get input/output streams");
+            System.exit(1);
+        }
         
         // Send session key to Bob
         sendSessionKey();
@@ -65,12 +84,34 @@ class Alice {  // Alice is a TCP client
     
     // Send session key to Bob
     public void sendSessionKey() {
+        try {
+            toBob.writeObject(crypto.getSessionKey());
+        } catch (IOException ioe) {
+            System.out.println("Error: cannot send session key to Bob!");
+            System.exit(1);
+        }
         
     }
     
     // Receive messages one by one from Bob, decrypt and write to file
-    public void receiveMessages() {
-        
+    public void receiveMessages() { 
+        try {
+            PrintWriter pw = new PrintWriter(new File("msgs.txt"));
+            for (int i=0;i<10;i++) {
+                SealedObject sealedMessage = (SealedObject)this.fromBob.readObject();
+                String message = crypto.decryptMsg(sealedMessage);
+                pw.println(message);
+            }
+            pw.close();
+
+            System.out.println("All messages are received from Bob");
+        } catch (ClassNotFoundException ioe) {
+            System.out.println("Error: message from Bob cannot typecast to class SealedObject");
+            System.exit(1); 
+        } catch (IOException ioe) {
+            System.out.println("Error receiving messages from Bob");
+            System.exit(1);
+        }
     }
     
     /*****************/
@@ -83,13 +124,13 @@ class Alice {  // Alice is a TCP client
         // Alice generates a new session key for each communication session
         private SecretKey sessionKey;
         // File that contains Bob' public key
-        public static final String PUBLIC_KEY_FILE = "public.key";
+        public static final String PUBLIC_KEY_FILE = "bob.pub   ";
         
         // Constructor
         public Crypto() {
             // Read Bob's public key from file
             readPublicKey();
-            // Generate session key dynamically
+            // Generate session key dynami  cally
             initSessionKey();
         }
         
@@ -97,22 +138,56 @@ class Alice {  // Alice is a TCP client
         public void readPublicKey() {
             // key is stored as an object and need to be read using ObjectInputStream.
             // See how Bob read his private key as an example.
+            try {
+                ObjectInputStream ois = 
+                    new ObjectInputStream(new FileInputStream(PUBLIC_KEY_FILE));
+                this.pubKey = (PublicKey)ois.readObject();
+                ois.close();
+            } catch (IOException oie) {
+                System.out.println("Error reading public key from file");
+                System.exit(1);
+            } catch (ClassNotFoundException cnfe) {
+                System.out.println("Error: cannot typecast to class PublicKey");
+                System.exit(1);
+            }
+            
+            System.out.println("Public key read from file " + PUBLIC_KEY_FILE);
         }
         
         // Generate a session key
         public void initSessionKey() {
             // suggested AES key length is 128 bits
+            try {
+                KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+                keyGen.init(128); // for example
+                sessionKey = keyGen.generateKey();
+            } catch (GeneralSecurityException gse) {
+                
+            }
         }
         
         // Seal session key with RSA public key in a SealedObject and return
         public SealedObject getSessionKey() {
-            
-            // Alice must use the same RSA key/transformation as Bob specified
-            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-            
             // RSA imposes size restriction on the object being encrypted (117 bytes).
             // Instead of sealing a Key object which is way over the size restriction,
-            // we shall encrypt AES key in its byte format (using getEncoded() method).           
+            // we shall encrypt AES key in its byte format (using getEncoded() method).  
+            SealedObject sessionKeyObj = null;
+
+            try {
+                // Alice must use the same RSA key/transformation as Bob specified
+                Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+                cipher.init(Cipher.ENCRYPT_MODE, pubKey);
+
+                byte[] byteSessionKey = sessionKey.getEncoded();
+                sessionKeyObj = new SealedObject(byteSessionKey, cipher);
+            } catch (GeneralSecurityException gse) {
+                System.out.println("Error: wrong cipher to encrypt session key");
+                System.exit(1);
+            } catch (IOException ioe) {
+                System.out.println("Error creating session key SealedObject");
+                System.exit(1);
+            }
+            return sessionKeyObj;   
         }
         
         // Decrypt and extract a message from SealedObject
@@ -120,9 +195,22 @@ class Alice {  // Alice is a TCP client
             
             String plainText = null;
             
-            // Alice and Bob use the same AES key/transformation
-            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            
+            try {
+                // Alice and Bob use the same AES key/transformation
+                Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+                cipher.init(Cipher.DECRYPT_MODE, sessionKey);
+                plainText = (String) encryptedMsgObj.getObject(cipher);
+
+            } catch (GeneralSecurityException gse) {
+                System.out.println("Error: wrong cipher to decrypt message");
+                System.exit(1);
+            } catch (IOException ioe) {
+                System.out.println("Error creating SealedObject");
+                System.exit(1);
+            } catch (ClassNotFoundException ioe) {
+                System.out.println("Error: cannot typecast to byte array");
+                System.exit(1); 
+            } 
             
             return plainText;
         }
