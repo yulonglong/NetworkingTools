@@ -57,3 +57,8 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Other files
+*.mp3
+*.mp4
+*.zip
