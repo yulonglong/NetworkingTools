@@ -77,8 +77,8 @@ class Bryan {  // Bryan is a TCP server
             System.exit(1);
         }
 
-    // Send public key and digest
-    sendPublicKey();
+        // Send public key and digest
+        sendPublicKey();
         
         // Receive session key from Amy
         getSessionKey();
